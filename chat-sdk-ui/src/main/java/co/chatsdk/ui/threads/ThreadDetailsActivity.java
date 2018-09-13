@@ -7,6 +7,7 @@
 
 package co.chatsdk.ui.threads;
 
+import android.app.AlertDialog;
 import android.content.Intent;
 import android.os.Bundle;
 import android.support.annotation.LayoutRes;
@@ -16,10 +17,16 @@ import android.view.MenuItem;
 import android.view.View;
 
 import com.facebook.drawee.view.SimpleDraweeView;
+import com.google.gson.Gson;
+import com.google.gson.reflect.TypeToken;
 
 import org.apache.commons.lang3.StringUtils;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import co.chatsdk.core.dao.Thread;
+import co.chatsdk.core.dao.ThreadMetaValue;
 import co.chatsdk.core.events.NetworkEvent;
 import co.chatsdk.core.session.ChatSDK;
 import co.chatsdk.core.session.InterfaceManager;
@@ -31,6 +38,7 @@ import co.chatsdk.ui.chat.ChatActivity;
 import co.chatsdk.ui.contacts.ContactsFragment;
 import co.chatsdk.ui.helpers.ProfilePictureChooserOnClickListener;
 import co.chatsdk.ui.main.BaseActivity;
+import io.reactivex.disposables.Disposable;
 
 /**
  * Created by braunster on 24/11/14.
@@ -47,6 +55,8 @@ public class ThreadDetailsActivity extends BaseActivity {
     protected DisposableList disposableList = new DisposableList();
 
     protected ActionBar actionBar;
+
+    private Gson gson = new Gson();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -107,6 +117,39 @@ public class ThreadDetailsActivity extends BaseActivity {
         contactsFragment.setLoadingMode(ContactsFragment.MODE_LOAD_THREAD_USERS);
         contactsFragment.setExtraData(thread.getEntityID());
         contactsFragment.setClickMode(ContactsFragment.CLICK_MODE_SHOW_PROFILE);
+
+        String adminsJson = "";
+        ThreadMetaValue adminsMetaValue = thread.metaValueForKey("admins");
+        if (adminsMetaValue != null) adminsJson = adminsMetaValue.getValue();
+        ArrayList<String> adminsFromJson = gson.fromJson(adminsJson, new TypeToken<List<String>>(){}.getType());
+        final ArrayList<String> admins = (adminsFromJson != null ? adminsFromJson : new ArrayList<>());
+
+        Disposable d = contactsFragment.onLongClickObservable().subscribe(user -> {
+            if (thread.getUsers().size() > 2 && !user.isMe()) {
+                String option1 = "Make user group admin";
+                boolean isAdmin = admins.contains(user.getEntityID());
+                if (isAdmin) option1 = "Remove admin rights from user";
+                AlertDialog.Builder builder = new AlertDialog.Builder(this);
+                String[] options = {option1, "Remove user from group"};
+                builder.setItems(options, (dialog, which) -> {
+                    if (which == 0) {
+                        if (isAdmin) {
+                            admins.remove(user.getEntityID());
+                        } else {
+                            admins.add(user.getEntityID());
+                        }
+                        thread.setMetaValue("admins", gson.toJson(admins));
+                        ChatSDK.thread().pushThreadMeta(thread).subscribe();
+                    }
+                    if (which == 1) {
+                        disposableList.add(ChatSDK.thread().removeUsersFromThread(thread, user).subscribe(() -> {
+                            contactsFragment.reloadData();
+                        }));
+                    }
+                });
+                builder.show();
+            }
+        });
 
         getSupportFragmentManager().beginTransaction().replace(R.id.frame_thread_users, contactsFragment).commit();
     }
